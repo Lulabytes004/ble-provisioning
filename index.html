@@ -140,7 +140,7 @@
     <div class="container">
         <div class="header">
             <h1>📡 ESP32 BLE Provisioning</h1>
-            <p>Versión v01</p>
+            <p>Versión v01.02 (UUIDs corregidos)</p>
         </div>
         
         <div class="content">
@@ -186,8 +186,17 @@
             constructor() {
                 this.device = null;
                 this.server = null;
+                
+                // UUIDs correctos del ESP32 Provisioning
                 this.SERVICE_UUID = '0000ffff-0000-1000-8000-00805f9b34fb';
                 this.WIFI_CONFIG_UUID = '0000ff51-0000-1000-8000-00805f9b34fb';
+                this.WIFI_CONTROL_UUID = '0000ff52-0000-1000-8000-00805f9b34fb';
+                this.PROTO_VER_UUID = '0000ff53-0000-1000-8000-00805f9b34fb';
+                
+                // UUIDs alternativos (versiones cortas y otras implementaciones)
+                this.SERVICE_UUID_ALT = ['FFFF', 'ABCD1234-5678-9012-3456-7890ABCDEF12'];
+                this.WIFI_CONFIG_UUID_ALT = ['FF51'];
+                
                 this.currentStep = 1;
                 this.init();
             }
@@ -263,10 +272,18 @@ Soluciones:
                 try {
                     console.log('📡 Iniciando escaneo de dispositivos BLE...');
                     
+                    // Incluir todos los UUIDs de servicios posibles para mayor compatibilidad
+                    const optionalServices = [
+                        this.SERVICE_UUID,
+                        ...this.SERVICE_UUID_ALT
+                    ];
+                    
+                    console.log('🔍 Buscando dispositivos con servicios:', optionalServices);
+                    
                     // Solicitar todos los dispositivos para mostrar lista completa
                     const device = await navigator.bluetooth.requestDevice({
                         acceptAllDevices: true,
-                        optionalServices: [this.SERVICE_UUID]
+                        optionalServices: optionalServices
                     });
 
                     // Simular obtención de RSSI (Web Bluetooth no expone RSSI directamente)
@@ -286,6 +303,26 @@ Soluciones:
                     this.server = server;
 
                     console.log('🔗 Servidor GATT conectado');
+
+                    // Intentar listar todos los servicios disponibles para debug
+                    try {
+                        const services = await server.getPrimaryServices();
+                        console.log(`📋 Servicios disponibles (${services.length}):`);
+                        for (const service of services) {
+                            console.log(`- Servicio: ${service.uuid}`);
+                            try {
+                                const characteristics = await service.getCharacteristics();
+                                console.log(`  Características (${characteristics.length}):`);
+                                for (const char of characteristics) {
+                                    console.log(`  - ${char.uuid}`);
+                                }
+                            } catch (e) {
+                                console.log(`  Error al obtener características: ${e}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ No se pudieron listar todos los servicios:', e);
+                    }
 
                     this.setStatus('connected', `Conectado a ${device.name || 'Dispositivo'}`);
                     this.showSuccess(`Conectado exitosamente a ${device.name || 'Dispositivo'}`);
@@ -316,6 +353,14 @@ Soluciones:
                         suggestions = [
                             'Permite el acceso a Bluetooth en el navegador',
                             'Recarga la página y acepta permisos'
+                        ];
+                    } else if (error.name === 'NetworkError' || 
+                              (error.message && error.message.includes('GATT operation failed'))) {
+                        message = 'Error de comunicación con el dispositivo';
+                        suggestions = [
+                            'El dispositivo puede estar fuera de alcance',
+                            'Reinicia el ESP32 y vuelve a intentar',
+                            'Asegúrate que el ESP32 está en modo provisioning'
                         ];
                     }
                     
@@ -444,26 +489,94 @@ Soluciones:
                     console.log('📶 Configurando WiFi:', ssid);
                     this.setStatus('connecting', 'Configurando WiFi...');
 
-                    // Obtener servicio
-                    const service = await this.server.getPrimaryService(this.SERVICE_UUID);
-                    const characteristic = await service.getCharacteristic(this.WIFI_CONFIG_UUID);
+                    // Estrategia 1: Buscar el servicio principal de provisioning
+                    try {
+                        console.log('🔍 Buscando servicio:', this.SERVICE_UUID);
+                        const service = await this.server.getPrimaryService(this.SERVICE_UUID);
+                        console.log('✅ Servicio encontrado:', service.uuid);
+                        
+                        console.log('🔍 Buscando característica:', this.WIFI_CONFIG_UUID);
+                        const characteristic = await service.getCharacteristic(this.WIFI_CONFIG_UUID);
+                        console.log('✅ Característica encontrada:', characteristic.uuid);
 
-                    // Enviar configuración
-                    const config = JSON.stringify({
-                        ssid: ssid,
-                        password: password,
-                        security: password ? 2 : 0
-                    });
+                        // Enviar configuración
+                        const config = JSON.stringify({
+                            ssid: ssid,
+                            password: password,
+                            security: password ? 2 : 0
+                        });
+                        console.log('📤 Enviando configuración:', config);
 
-                    await characteristic.writeValue(new TextEncoder().encode(config));
-                    
-                    this.setStatus('connected', 'WiFi configurado');
-                    this.showSuccess(`Red "${ssid}" configurada correctamente`);
-                    setTimeout(() => this.showStep(3), 2000);
+                        await characteristic.writeValue(new TextEncoder().encode(config));
+                        console.log('✅ Configuración enviada correctamente');
+                        
+                        this.setStatus('connected', 'WiFi configurado');
+                        this.showSuccess(`Red "${ssid}" configurada correctamente`);
+                        setTimeout(() => this.showStep(3), 2000);
+                        return;
+                    } catch (primaryError) {
+                        console.error('❌ Error con UUID principal:', primaryError);
+                        
+                        // Si falla, intentar con UUIDs alternativos
+                        if (this.SERVICE_UUID_ALT.length > 0) {
+                            console.log('🔄 Intentando con UUIDs alternativos...');
+                            
+                            for (const altUUID of this.SERVICE_UUID_ALT) {
+                                try {
+                                    console.log(`🔍 Buscando servicio alternativo: ${altUUID}`);
+                                    const altService = await this.server.getPrimaryService(altUUID);
+                                    console.log('✅ Servicio alternativo encontrado:', altService.uuid);
+                                    
+                                    // Buscar característica en este servicio
+                                    const characteristics = await altService.getCharacteristics();
+                                    console.log(`📋 Características disponibles (${characteristics.length}):`);
+                                    
+                                    // Buscar una característica que podamos escribir
+                                    for (const characteristic of characteristics) {
+                                        console.log(`- Característica: ${characteristic.uuid}`);
+                                        if (characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+                                            console.log('✅ Característica escribible encontrada');
+                                            
+                                            // Enviar configuración
+                                            const config = JSON.stringify({
+                                                ssid: ssid,
+                                                password: password,
+                                                security: password ? 2 : 0
+                                            });
+                                            
+                                            await characteristic.writeValue(new TextEncoder().encode(config));
+                                            console.log('✅ Configuración enviada correctamente (UUID alternativo)');
+                                            
+                                            this.setStatus('connected', 'WiFi configurado');
+                                            this.showSuccess(`Red "${ssid}" configurada correctamente`);
+                                            setTimeout(() => this.showStep(3), 2000);
+                                            return;
+                                        }
+                                    }
+                                } catch (altError) {
+                                    console.error(`❌ Error con UUID alternativo ${altUUID}:`, altError);
+                                }
+                            }
+                        }
+                        
+                        // Si llegamos aquí, todas las estrategias fallaron
+                        throw new Error('No se pudo encontrar servicio o característica adecuada');
+                    }
 
                 } catch (error) {
                     console.error('❌ Error configurando WiFi:', error);
-                    this.showError('Error al configurar WiFi: ' + error.message);
+                    
+                    let errorMsg = error.message;
+                    
+                    // Mensajes más amigables
+                    if (error.message.includes('No Services matching UUID')) {
+                        errorMsg = 'No se encontró el servicio de provisioning. Verifica que el ESP32 esté en modo provisioning.';
+                    } else if (error.message.includes('No Characteristics matching UUID')) {
+                        errorMsg = 'No se encontró la característica de configuración WiFi.';
+                    }
+                    
+                    this.showError('Error al configurar WiFi: ' + errorMsg);
+                    this.setStatus('error', 'Error de configuración');
                 }
             }
 
