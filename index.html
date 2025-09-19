@@ -140,7 +140,7 @@
     <div class="container">
         <div class="header">
             <h1>📡 ESP32 BLE Provisioning</h1>
-            <p>Versión v01</p>
+            <p>Versión v01.1</p>
         </div>
         
         <div class="content">
@@ -186,6 +186,7 @@
             constructor() {
                 this.device = null;
                 this.server = null;
+                // UUIDs correctos para ESP-IDF BLE Provisioning
                 this.SERVICE_UUID = '0000ffff-0000-1000-8000-00805f9b34fb';
                 this.WIFI_CONFIG_UUID = '0000ff51-0000-1000-8000-00805f9b34fb';
                 this.currentStep = 1;
@@ -262,6 +263,7 @@ Soluciones:
                 
                 try {
                     console.log('📡 Iniciando escaneo de dispositivos BLE...');
+                    console.log('🔍 Buscando dispositivos con servicio:', this.SERVICE_UUID);
                     
                     // Solicitar todos los dispositivos para mostrar lista completa
                     const device = await navigator.bluetooth.requestDevice({
@@ -282,6 +284,7 @@ Soluciones:
                     this.device = device;
 
                     this.setStatus('connecting', 'Conectando...');
+                    console.log('🔌 Conectando a servidor GATT...');
                     const server = await device.gatt.connect();
                     this.server = server;
 
@@ -445,8 +448,13 @@ Soluciones:
                     this.setStatus('connecting', 'Configurando WiFi...');
 
                     // Obtener servicio
+                    console.log('🔍 Buscando servicio:', this.SERVICE_UUID);
                     const service = await this.server.getPrimaryService(this.SERVICE_UUID);
+                    console.log('✅ Servicio encontrado');
+                    
+                    console.log('🔍 Buscando característica:', this.WIFI_CONFIG_UUID);
                     const characteristic = await service.getCharacteristic(this.WIFI_CONFIG_UUID);
+                    console.log('✅ Característica encontrada');
 
                     // Enviar configuración
                     const config = JSON.stringify({
@@ -454,8 +462,10 @@ Soluciones:
                         password: password,
                         security: password ? 2 : 0
                     });
-
+                    
+                    console.log('📤 Enviando configuración WiFi (datos sensibles ocultos)');
                     await characteristic.writeValue(new TextEncoder().encode(config));
+                    console.log('✅ Configuración enviada correctamente');
                     
                     this.setStatus('connected', 'WiFi configurado');
                     this.showSuccess(`Red "${ssid}" configurada correctamente`);
@@ -463,7 +473,16 @@ Soluciones:
 
                 } catch (error) {
                     console.error('❌ Error configurando WiFi:', error);
-                    this.showError('Error al configurar WiFi: ' + error.message);
+                    
+                    let errorMsg = error.message;
+                    // Mensajes más amigables
+                    if (error.message.includes('No Services matching UUID')) {
+                        errorMsg = 'No se encontró el servicio de provisioning. Verifica que el ESP32 esté en modo provisioning.';
+                    } else if (error.message.includes('No Characteristics matching UUID')) {
+                        errorMsg = 'No se encontró la característica de configuración WiFi.';
+                    }
+                    
+                    this.showError('Error al configurar WiFi: ' + errorMsg);
                 }
             }
 
